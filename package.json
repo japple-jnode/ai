@@ -3,6 +3,13 @@
   "version": "1.0.0",
   "description": "Simple AI API package for Node.js.",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./gemini": "./src/gemini/index.js",
+    "./openai-chat": "./src/openai-chat/index.js",
+    "./claude": "./src/claude/index.js",
+    "./openai-response": "./src/openai-response/index.js"
+  },
   "scripts": {
     "test": "echo \"Hello, AI.\""
   },
@@ -26,6 +33,6 @@
   },
   "homepage": "https://github.com/japple-jnode/ai#readme",
   "dependencies": {
-    "@jnode/request": ">=2.0.0 <2.0.0"
+    "@jnode/request": "^2.1.3"
   }
 }
