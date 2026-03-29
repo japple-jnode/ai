@@ -60,7 +60,7 @@ class AIConversation {
     // interact with current conversation
     interact(conversation, context, options = {}) {
         this.conversation.push(...AIConversation.parse(conversation));
-        return this.agent.interact(this, context, options = {});
+        return this.agent.interact(this, context, options);
     }
 
     // push new conversation

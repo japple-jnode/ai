@@ -77,8 +77,9 @@ class AIModel {
             for (let i of conversation.last.components) {
                 if (i.type === 'function_call') {
                     funcs.push({
+                        name: i.name,
                         func: agent._functions[i.name],
-                        args: i.args,
+                        args: i.arguments ?? i.args,
                         ctx: context
                     });
                 }
@@ -88,10 +89,14 @@ class AIModel {
             if (funcs.length > 0) {
                 const msg = { role: 'system', components: [] };
                 for (let i of funcs) {
+                    if (!i.func || typeof i.func.call !== 'function') {
+                        throw new Error(`Function "${i.name}" is not registered on this agent.`);
+                    }
+
                     const res = await i.func.call(i.args, i.ctx);
                     msg.components.push({
                         type: 'function_response',
-                        name: i.func.name,
+                        name: i.name,
                         result: res.result,
                         meta: res.meta
                     });
@@ -163,8 +168,15 @@ class AIModel {
                         });
                         break;
                     case 'action': // action component
-                        if (j.name.startsWith('@')) {
-                            msg.components.push({ type: 'action', action: j.action, reaction: j.reaction, x: j.x ?? {} });
+                        if (typeof j.name === 'string' && j.name.startsWith('@')) {
+                            msg.components.push({
+                                type: 'action',
+                                name: j.name,
+                                action: j.action,
+                                reaction: j.reaction,
+                                meta: j.meta,
+                                x: j.x ?? {}
+                            });
                         } else { // function like action
                             msg.components.push({ type: 'function_call', name: j.name, arguments: j.action, x: j.x ?? {} });
                             body.conversation.push(msg);
@@ -233,6 +245,7 @@ class AIModel {
 
                                 msg.components.push({
                                     type: 'action',
+                                    name: j.name,
                                     action: j.arguments,
                                     reaction: result.result,
                                     meta: result.meta,
