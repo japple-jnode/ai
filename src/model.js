@@ -75,11 +75,11 @@ class AIModel {
         if (conversation.last?.role === 'model') {
             const funcs = [];
             for (let i of conversation.last.components) {
-                if (i.type === 'function_call') {
+                if (i.type === 'function_call' && agent._actions[i.name]) { // run as action if action exists
                     funcs.push({
                         name: i.name,
                         func: agent._functions[i.name],
-                        args: i.arguments ?? i.args,
+                        args: i.arguments,
                         ctx: context
                     });
                 }
@@ -149,8 +149,8 @@ class AIModel {
         body.conversation = [];
         const conv = conversation.conversation;
         for (let i = 0; i < conv.length; i++) {
-            let msg = (i > 0 && conv[i - 1]?.role === conv[i].role) ?
-                body.conversation[body.conversation.length - 1] : // continue last message if same role
+            let msg = (body.conversation[body.conversation.length - 1]?.role === conv[i].role) ?
+                body.conversation.pop() :
                 { role: conv[i].role, components: [] }; // new message if different role
 
             for (let j of conv[i].components) {
@@ -207,6 +207,7 @@ class AIModel {
         const maxActions = options.maxActions ?? this.options.maxActions ?? 24;
         const meta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
         const msg = { role: 'model', components: [] };
+
         for (let i = 0; i < maxActions; i++) {
             const res = await request('POST', `${this.service.baseUrl}/models/${encodeURIComponent(this.name)}/interact`, JSON.stringify(body), {
                 'Authorization': options.auth ?? this.options.auth,
@@ -270,6 +271,11 @@ class AIModel {
 
             // ends
             if (ends) break;
+        }
+
+        // push to body
+        if (msg.components.length > 0) {
+            conversation.conversation.push(msg);
         }
 
         // set meta to conversation and return
