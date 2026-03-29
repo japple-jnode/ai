@@ -131,18 +131,19 @@ class AIModel {
         body.functions = [];
 
         for (let i of agent.actions) {
-            let info = i.getInfo();
-            if (info instanceof Promise) info = await info;
+            let fnInfo = i.getInfo();
+            if (fnInfo instanceof Promise) fnInfo = await fnInfo;
 
             // native actions
-            if (info.name.startsWith('@')) body.actions.push(info);
-            else body.functions.push(info);
+            if (fnInfo.name.startsWith('@') && info.features.actions.includes(fnInfo.name)) body.actions.push(fnInfo);
+            if (fnInfo.name.startsWith('@')) continue; // unsupported native action, skip
+            else body.functions.push(fnInfo);
         }
 
         for (let i of agent.functions) {
-            let info = i.getInfo();
-            if (info instanceof Promise) info = await info;
-            body.functions.push(info);
+            let fnInfo = i.getInfo();
+            if (fnInfo instanceof Promise) fnInfo = await fnInfo;
+            body.functions.push(fnInfo);
         }
 
         // clean up conversation
@@ -159,9 +160,16 @@ class AIModel {
                         msg.components.push({ type: 'text', content: j.content, x: j.x ?? {} });
                         break;
                     case 'file': // file component
+                        // check multimodal capabilities
+                        const mediaType = j.mediaType ?? j.media_type;
+                        if (!info.features.multimodalCapabilities.includes(mediaType)) {
+                            if (mediaType === 'text/plain') msg.components.push({ type: 'text', content: j.data.toString(), x: j.x ?? {} });
+                            continue;
+                        }
+
                         msg.components.push({
                             type: 'file',
-                            media_type: j.mediaType ?? j.media_type,
+                            media_type: mediaType,
                             uri: j.uri,
                             data: Buffer.isBuffer(j.data) ? j.data.toString('base64') : j.data,
                             x: j.x ?? {}
