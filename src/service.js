@@ -9,6 +9,7 @@ by JustApple
 
 // dependencies
 const AIModel = require('./model.js');
+const { request } = require('@jnode/request');
 
 // basic jai service
 class AIService {
@@ -20,6 +21,22 @@ class AIService {
     model(name, options) {
         return new AIModel(this, name, { ...this.options, ...options });
     }
+
+    async listModels(options) {
+        const res = await request('GET', `${this.baseUrl}/models`, null, {
+            'Authorization': options.auth ?? this.options.auth
+        });
+
+        if (res.statusCode !== 200) throw _requestError(res);
+
+        
+    }
+}
+
+function _requestError(res) {
+    const err = new Error(`Request failed with code ${res.statusCode}.`);
+    err.res = res;
+    return err;
 }
 
 // export

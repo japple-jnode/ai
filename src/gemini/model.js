@@ -4,7 +4,7 @@ v2
 
 Simple AI API package for Node.js.
 
-by Gemini
+by Gemini (I'm not sure if they all works fine, but seems everything is correct. - from JA)
 */
 
 // dependencies
