@@ -4,8 +4,7 @@ v2
 
 Simple AI API package for Node.js.
 
-by Codex
-   (I'm not sure if they al works fine)
+by Codex (I'm not sure if they all works fine - from JA)
 */
 
 // dependencies

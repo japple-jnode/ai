@@ -4,10 +4,14 @@ v2
 
 Simple AI API package for Node.js.
 
-by JustNode Dev Team / JustApple
+by JustApple
 */
 
 // export
 module.exports = {
-
+    AIService: require('./service.js'),
+    AIModel: require('./model.js'),
+    AIConversation: require('./conversation.js'),
+    AIAgent: require('./agent.js'),
+    ...require('./function.js')
 };
