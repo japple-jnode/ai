@@ -8,17 +8,17 @@ by JustApple
 */
 
 // dependencies
-const GeminiChatModel = require('./model.js');
+const GeminiModel = require('./model.js');
 
-// openai chat completion service
+// gemini service
 class GeminiService {
-    constructor(baseUrl = 'https://generativelanguage.googleapis./v1beta', options = {}) {
+    constructor(baseUrl = 'https://generativelanguage.googleapis.com/v1beta', options = {}) {
         this.baseUrl = baseUrl;
         this.options = options;
     }
 
     model(name, options) {
-        return new GeminiChatModel(name, { ...this.options, ...options });
+        return new GeminiModel(name, { ...this.options, ...options });
     }
 }
 

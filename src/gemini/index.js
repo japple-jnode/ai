@@ -6,3 +6,9 @@ Simple AI API package for Node.js.
 
 by JustApple
 */
+
+// export
+module.exports = {
+    GeminiService: require('./service.js'),
+    GeminiModel: require('./model.js')
+};
