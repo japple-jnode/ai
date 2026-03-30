@@ -75,10 +75,10 @@ class AIModel {
         if (conversation.last?.role === 'model') {
             const funcs = [];
             for (let i of conversation.last.components) {
-                if (i.type === 'function_call' && agent._actions[i.name]) { // run as action if action exists
+                if (i.type === 'function_call' && (agent._functions[i.name] || agent._actions[i.name])) { // run as action if action exists
                     funcs.push({
                         name: i.name,
-                        func: agent._functions[i.name],
+                        func: agent._functions[i.name] || agent._actions[i.name],
                         args: i.arguments,
                         ctx: context
                     });
@@ -289,6 +289,10 @@ class AIModel {
         // set meta to conversation and return
         conversation.meta = meta;
         return conversation;
+    }
+
+    // stream interact
+    async *streamInteract(agent, conversation, context, options = {}) {
     }
 }
 
