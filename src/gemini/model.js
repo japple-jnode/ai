@@ -442,9 +442,10 @@ class GeminiModel {
 
 function _mapThinkingConfig(level) {
     if (typeof level === 'number') return { thinkingBudget: level };
-    if (level === 'low') return { thinkingBudget: 1024 };
-    if (level === 'medium') return { thinkingBudget: 4096 };
-    if (level === 'high') return { thinkingBudget: 8192 };
+    if (level === 'low') return { thinkingLevel: 'LOW' };
+    if (level === 'medium') return { thinkingLevel: 'MEDIUM' };
+    if (level === 'high') return { thinkingLevel: 'HIGH' };
+    if (level === 'none') return { thinkingLevel: 'MINIMAL' };
     return null;
 }
 
