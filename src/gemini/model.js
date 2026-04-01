@@ -243,7 +243,7 @@ class GeminiModel {
 
             if (info.name.startsWith('@')) continue;
 
-            const apiName = _toolApiName(info.name, registry.byApiName);
+            const apiName = info.name.slice(0, 64);
             registry.byApiName.set(apiName, {
                 name: info.name,
                 apiName,
@@ -471,25 +471,6 @@ function _mapUserFilePart(part) {
         };
     }
     return null;
-}
-
-function _toolApiName(name, registry = new Map()) {
-    let base = String(name ?? 'tool')
-        .replace(/^@+/, 'action_')
-        .replace(/[^a-zA-Z0-9_-]/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_+|_+$/g, '')
-        .slice(0, 64) || 'tool';
-
-    if (/^[0-9-]/.test(base)) base = 'fn_' + base;
-
-    let candidate = base;
-    let index = 2;
-    while (registry.has(candidate)) {
-        const suffix = `_${index++}`;
-        candidate = `${base.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`;
-    }
-    return candidate;
 }
 
 function _parseToolArguments(args) {
