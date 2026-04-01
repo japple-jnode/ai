@@ -284,10 +284,6 @@ class GeminiModel {
             generationConfig.thinkingConfig = thinkingConfig;
         }
 
-        if (Object.keys(generationConfig).length > 0) {
-            body.generationConfig = generationConfig;
-        }
-
         if (agent.instructions) {
             body.systemInstruction = {
                 parts: [{ text: agent.instructions }]
