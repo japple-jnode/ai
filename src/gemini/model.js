@@ -265,6 +265,7 @@ class GeminiModel {
         return body;
     }
 
+    // interact with model
     async interact(agent, conversation, context, options = {}) {
         if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
