@@ -373,7 +373,7 @@ class GeminiModel {
                                 functionResponse: {
                                     name: j.functionCall.name,
                                     response: result.result,
-                                    parts: (j.attachments ?? []).map(e => ({
+                                    parts: (result.attachments ?? []).map(e => ({
                                         inlineData: {
                                             mimeType: e.media_type,
                                             data: Buffer.isBuffer(e.data) ? e.data.toString('base64') : e.data
@@ -426,7 +426,7 @@ class GeminiModel {
                     }
                 }
                 if (actionContent.parts.length > 0) body.contents.push(actionContent);
-                if (reactionContent.parts.length > 0) body.contents.push(reactionMsg);
+                if (reactionContent.parts.length > 0) body.contents.push(reactionContent);
             } else break;
 
             // ends
@@ -440,6 +440,251 @@ class GeminiModel {
 
         // set meta to conversation and return
         conversation.meta = meta;
+        return conversation;
+    }
+
+    // stream interact
+    async *streamInteract(agent, conversation, context, options = {}) {
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
+
+        // function executing if conversations ends with model turn with function call component
+        if (conversation.last?.role === 'model') {
+            const funcs = [];
+            for (let i of conversation.last.components) {
+                if (i.type === 'function_call' && (agent._functions[i.name] || agent._actions[i.name])) {
+                    funcs.push({
+                        name: i.name,
+                        func: agent._functions[i.name] || agent._actions[i.name],
+                        args: i.arguments,
+                        ctx: context
+                    });
+                }
+            }
+
+            if (funcs.length > 0) {
+                const msg = { role: 'system', components: [] };
+                for (let i of funcs) {
+                    if (!i.func || typeof i.func.call !== 'function') {
+                        throw new Error(`Function "${i.name}" is not registered on this agent.`);
+                    }
+
+                    const res = await i.func.call(i.args, i.ctx);
+                    const component = {
+                        type: 'function_response',
+                        name: i.name,
+                        result: res.result,
+                        meta: res.meta
+                    };
+                    msg.components.push(component);
+                    yield { type: 'component', component: component };
+                }
+                conversation.conversation.push(msg);
+                yield { type: 'end', conversation };
+                return conversation;
+            }
+        }
+
+        // build body
+        const body = await this._buildBody(agent, conversation, context, options);
+
+        // start response
+        const maxActions = options.maxActions ?? this.options.maxActions ?? 24;
+        const meta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
+        const msg = { role: 'model', components: [] };
+
+        for (let i = 0; i < maxActions; i++) {
+            const res = await request('POST', `${this.service.baseUrl}/models/${encodeURIComponent(this.name)}:streamGenerateContent?alt=sse`, JSON.stringify(body), {
+                'x-goog-api-key': options.auth ?? this.options.auth,
+                'Content-Type': 'application/json'
+            });
+
+            if (res.statusCode !== 200) throw _requestError(res);
+
+            const sse = res.sse();
+
+            const requestMeta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
+            let ends = true;
+            const actionContent = { role: 'model', parts: [] };
+            const reactionContent = { role: 'user', parts: [] };
+            let lastComponent = null;
+
+            for await (let event of sse) {
+                if (!event.data || event.data === '[DONE]') continue;
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (err) {
+                    continue;
+                }
+
+                // update request meta
+                if (data.modelVersion) requestMeta.model = data.modelVersion;
+                if (data.usageMetadata) {
+                    requestMeta.inputTotal = data.usageMetadata.promptTokenCount ?? requestMeta.inputTotal;
+                    requestMeta.outputTotal = data.usageMetadata.candidatesTokenCount ?? requestMeta.outputTotal;
+                    requestMeta.price = data.usageMetadata.totalTokenCount ?? requestMeta.price;
+                }
+
+                const candidate = data.candidates?.[0];
+                if (!candidate?.content?.parts) continue;
+
+                for (let j of candidate.content.parts) {
+                    if (j.text) { // text or thought component
+                        const type = j.thought ? 'thought' : 'text';
+                        if (lastComponent && lastComponent.type === type && (lastComponent.x?.gemini_thoughtSignature === j.thoughtSignature)) {
+                            lastComponent.content += j.text;
+                            yield { type: 'continue', content: j.text, component: lastComponent, meta: requestMeta };
+
+                            // update actionContent
+                            const lastActionPart = actionContent.parts[actionContent.parts.length - 1];
+                            if (lastActionPart && !!lastActionPart.thought === !!j.thought && lastActionPart.text !== undefined) {
+                                lastActionPart.text += j.text;
+                            } else {
+                                actionContent.parts.push({ ...j });
+                            }
+                        } else {
+                            const component = {
+                                type: type,
+                                content: j.text,
+                                x: { gemini_thoughtSignature: j.thoughtSignature }
+                            };
+                            msg.components.push(component);
+                            yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                            lastComponent = component;
+                            actionContent.parts.push({ ...j });
+                        }
+                    } else if (j.inlineData) {
+                        const component = {
+                            type: 'file',
+                            mediaType: j.inlineData.mimeType,
+                            data: j.inlineData.data
+                        };
+                        msg.components.push(component);
+                        yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                        lastComponent = component;
+                        actionContent.parts.push(j);
+                    } else if (j.fileData) {
+                        const component = {
+                            type: 'file',
+                            mediaType: j.fileData.mimeType,
+                            uri: j.fileData.fileUri
+                        };
+                        msg.components.push(component);
+                        yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                        lastComponent = component;
+                        actionContent.parts.push(j);
+                    } else if (j.functionCall) {
+                        if (agent._actions[j.functionCall.name]) { // run as action
+                            const result = await agent._actions[j.functionCall.name].call(j.functionCall.args, context);
+
+                            const component = {
+                                type: 'action',
+                                name: j.functionCall.name,
+                                action: j.functionCall.args,
+                                reaction: result.result,
+                                reaction_attachments: result.attachments ?? [],
+                                meta: result.meta,
+                                x: j.x ?? {}
+                            };
+                            msg.components.push(component);
+                            yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                            lastComponent = component;
+                            actionContent.parts.push(j);
+
+                            reactionContent.parts.push({
+                                functionResponse: {
+                                    name: j.functionCall.name,
+                                    response: result.result,
+                                    parts: (result.attachments ?? []).map(e => ({
+                                        inlineData: {
+                                            mimeType: e.media_type,
+                                            data: Buffer.isBuffer(e.data) ? e.data.toString('base64') : e.data
+                                        }
+                                    })),
+                                }
+                            });
+
+                            ends = false; // generate again after action executed
+                        } else { // normal function call
+                            const component = {
+                                type: 'function_call',
+                                name: j.functionCall.name,
+                                arguments: j.functionCall.args,
+                                x: {
+                                    gemini_thoughtSignature: j.x?.gemini_thoughtSignature ?? 'skip_thought_signature_validator'
+                                }
+                            };
+                            msg.components.push(component);
+                            yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                            lastComponent = component;
+                            actionContent.parts.push(j);
+
+                            reactionContent.parts.push({ // canceled
+                                functionResponse: {
+                                    name: j.functionCall.name,
+                                    response: options.canceledResult ?? this.options.canceledResult ?? { status: 'EXECUTION_CANCELED', message: 'Please run this function again.' }
+                                }
+                            });
+                        }
+                    } else if (j.functionResponse) { // function response
+                        const component = {
+                            type: 'function_response',
+                            name: j.functionResponse.name,
+                            result: j.functionResponse.response,
+                            attachments: (j.functionResponse.parts ?? []).map(e => ({
+                                media_type: e.inlineData.mimeType,
+                                data: e.inlineData.data
+                            })),
+                            x: j.x?.gemini_functionResponse
+                        };
+                        msg.components.push(component);
+                        yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                        lastComponent = component;
+                        actionContent.parts.push(j);
+                    } else if (j.executableCode) { // code execution
+                        const component = {
+                            type: 'action',
+                            name: '@executable_code',
+                            action: j.executableCode,
+                            x: { gemini_thoughtSignature: j.x?.gemini_thoughtSignature }
+                        };
+                        msg.components.push(component);
+                        yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                        lastComponent = component;
+                        actionContent.parts.push(j);
+                    } else if (j.codeExecutionResult) { // code execution result
+                        if (msg.components[msg.components.length - 1]?.name === '@executable_code') {
+                            msg.components[msg.components.length - 1].reaction = j.codeExecutionResult;
+                            yield { type: 'component', component: msg.components[msg.components.length - 1], last: lastComponent, meta: requestMeta };
+                        }
+                        actionContent.parts.push(j);
+                    }
+                }
+            }
+
+            if (actionContent.parts.length > 0) body.contents.push(actionContent);
+            if (reactionContent.parts.length > 0) body.contents.push(reactionContent);
+
+            // metadata update
+            meta.model = requestMeta.model || meta.model;
+            meta.inputTotal += requestMeta.inputTotal;
+            meta.outputTotal += requestMeta.outputTotal;
+            meta.price += requestMeta.price;
+            meta.x = Object.assign(meta.x, requestMeta.x);
+
+            // ends
+            if (ends) break;
+        }
+
+        // push to body
+        if (msg.components.length > 0) {
+            conversation.conversation.push(msg);
+        }
+
+        // set meta to conversation and return
+        conversation.meta = meta;
+        yield { type: 'end', conversation, meta };
         return conversation;
     }
 }
