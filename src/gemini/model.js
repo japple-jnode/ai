@@ -656,7 +656,7 @@ class GeminiModel {
                     } else if (j.codeExecutionResult) { // code execution result
                         if (msg.components[msg.components.length - 1]?.name === '@executable_code') {
                             msg.components[msg.components.length - 1].reaction = j.codeExecutionResult;
-                            yield { type: 'component', component: msg.components[msg.components.length - 1], last: lastComponent, meta: requestMeta };
+                            yield { type: 'continue', reaction: j.codeExecutionResult, component: msg.components[msg.components.length - 1], meta: requestMeta };
                         }
                         actionContent.parts.push(j);
                     }

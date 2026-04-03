@@ -424,8 +424,16 @@ class AIModel {
                     }
                     last = current;
                 } else if (data.event.type === 'continue') { // continue current component
-                    current.content += data.event.content ?? '';
-                    yield { type: 'continue', content: data.event.content, component: current, meta: requestMeta };
+                    if (current.type === 'text' || current.type === 'thought') { // text or thought component continue
+                        current.content += data.event.content ?? '';
+                        yield { type: 'continue', content: data.event.content, component: current, meta: requestMeta };
+                    } else if (current.type === 'file') {  // file component continue, but we don't really recommand you to stream file content in base64
+                        current.data += data.event.data ?? '';
+                        yield { type: 'continue', data: data.event.data, component: current, meta: requestMeta };
+                    } else if (current.type === 'action') { // action component continue, for providing reaction
+                        current.reaction = data.event.reaction ?? '';
+                        yield { type: 'continue', reaction: data.event.reaction, component: current, meta: requestMeta };
+                    }
                 } else if (data.event.type === 'end') break; // end of response
             }
 

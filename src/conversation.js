@@ -63,6 +63,12 @@ class AIConversation {
         return this.agent.interact(this, context, options);
     }
 
+    // stream interact with current conversation
+    streamInteract(conversation, context, options = {}) {
+        this.conversation.push(...AIConversation.parse(conversation));
+        return this.agent.streamInteract(this, context, options);
+    }
+
     // push new conversation
     push(conversation) {
         this.conversation.push(...AIConversation.parse(conversation));

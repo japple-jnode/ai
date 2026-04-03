@@ -68,6 +68,11 @@ class AIAgent {
     interact(conversation, context, options = {}) {
         return this.model.interact(this, conversation, context, options);
     }
+
+    // stream interact with current agent
+    streamInteract(conversation, context, options = {}) {
+        return this.model.streamInteract(this, conversation, context, options);
+    }
 }
 
 // export
