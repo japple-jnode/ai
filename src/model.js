@@ -65,47 +65,7 @@ class AIModel {
         return info;
     }
 
-    // interact with interactive model, every parameter must be followed
-    async interact(agent, conversation, context, options = {}) {
-        // init
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
-        if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
-
-        // function executing if conversations ends with model turn with function call component
-        if (conversation.last?.role === 'model') {
-            const funcs = [];
-            for (let i of conversation.last.components) {
-                if (i.type === 'function_call' && (agent._functions[i.name] || agent._actions[i.name])) { // run as action if action exists
-                    funcs.push({
-                        name: i.name,
-                        func: agent._functions[i.name] || agent._actions[i.name],
-                        args: i.arguments,
-                        ctx: context
-                    });
-                }
-            }
-
-            // execute functions
-            if (funcs.length > 0) {
-                const msg = { role: 'system', components: [] };
-                for (let i of funcs) {
-                    if (!i.func || typeof i.func.call !== 'function') {
-                        throw new Error(`Function "${i.name}" is not registered on this agent.`);
-                    }
-
-                    const res = await i.func.call(i.args, i.ctx);
-                    msg.components.push({
-                        type: 'function_response',
-                        name: i.name,
-                        result: res.result,
-                        meta: res.meta
-                    });
-                }
-                conversation.conversation.push(msg);
-                return conversation;
-            }
-        }
-
+    async _buildBody(agent, conversation, context, options) {
         // get info
         const info = await this.getInfo();
 
@@ -136,7 +96,7 @@ class AIModel {
 
             // native actions
             if (fnInfo.name.startsWith('@') && info.features.actions.includes(fnInfo.name)) body.actions.push(fnInfo);
-            if (fnInfo.name.startsWith('@')) continue; // unsupported native action, skip
+            else if (fnInfo.name.startsWith('@')) continue; // unsupported native action, skip
             else body.functions.push(fnInfo);
         }
 
@@ -182,6 +142,7 @@ class AIModel {
                                 name: j.name,
                                 action: j.action,
                                 reaction: j.reaction,
+                                reaction_attachments: j.reactionAttachments ?? j.reaction_attachments,
                                 meta: j.meta,
                                 x: j.x ?? {}
                             });
@@ -190,7 +151,7 @@ class AIModel {
                             body.conversation.push(msg);
 
                             msg = { role: 'system', components: [] }; // new system message for function response
-                            msg.components.push({ type: 'function_response', name: j.name, result: j.reaction, x: j.x ?? {} });
+                            msg.components.push({ type: 'function_response', name: j.name, result: j.reaction, attachments: j.attachments, x: j.x ?? {} });
                             body.conversation.push(msg);
 
                             msg = { role: conv[i].role, components: [] }; // new message for next components
@@ -200,7 +161,7 @@ class AIModel {
                         msg.components.push({ type: 'function_call', name: j.name, arguments: j.arguments, x: j.x ?? {} });
                         break;
                     case 'function_response': // function response component
-                        msg.components.push({ type: 'function_response', name: j.name, result: j.result, x: j.x ?? {} });
+                        msg.components.push({ type: 'function_response', name: j.name, result: j.result, attachments: j.attachments, x: j.x ?? {} });
                         break;
                     case 'thought': // thought component
                         msg.components.push({ type: 'thought', content: j.content, x: j.x ?? {} });
@@ -210,6 +171,53 @@ class AIModel {
 
             if (msg.components.length > 0) body.conversation.push(msg);
         }
+
+        return body;
+    }
+
+    // interact with interactive model, every parameter must be followed
+    async interact(agent, conversation, context, options = {}) {
+        // init
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
+
+        // function executing if conversations ends with model turn with function call component
+        if (conversation.last?.role === 'model') {
+            const funcs = [];
+            for (let i of conversation.last.components) {
+                if (i.type === 'function_call' && (agent._functions[i.name] || agent._actions[i.name])) { // run as action if action exists
+                    funcs.push({
+                        name: i.name,
+                        func: agent._functions[i.name] || agent._actions[i.name],
+                        args: i.arguments,
+                        ctx: context
+                    });
+                }
+            }
+
+            // execute functions
+            if (funcs.length > 0) {
+                const msg = { role: 'system', components: [] };
+                for (let i of funcs) {
+                    if (!i.func || typeof i.func.call !== 'function') {
+                        throw new Error(`Function "${i.name}" is not registered on this agent.`);
+                    }
+
+                    const res = await i.func.call(i.args, i.ctx);
+                    msg.components.push({
+                        type: 'function_response',
+                        name: i.name,
+                        result: res.result,
+                        meta: res.meta
+                    });
+                }
+                conversation.conversation.push(msg);
+                return conversation;
+            }
+        }
+
+        // build body
+        const body = await this._buildBody(agent, conversation, context, options);
 
         // start response
         const maxActions = options.maxActions ?? this.options.maxActions ?? 24;
@@ -257,6 +265,7 @@ class AIModel {
                                     name: j.name,
                                     action: j.arguments,
                                     reaction: result.result,
+                                    reaction_attachments: result.attachments ?? [],
                                     meta: result.meta,
                                     x: j.x ?? {}
                                 });
@@ -293,6 +302,130 @@ class AIModel {
 
     // stream interact
     async *streamInteract(agent, conversation, context, options = {}) {
+        // init
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
+
+        // function executing if conversations ends with model turn with function call component
+        if (conversation.last?.role === 'model') {
+            const funcs = [];
+            for (let i of conversation.last.components) {
+                if (i.type === 'function_call' && (agent._functions[i.name] || agent._actions[i.name])) { // run as action if action exists
+                    funcs.push({
+                        name: i.name,
+                        func: agent._functions[i.name] || agent._actions[i.name],
+                        args: i.arguments,
+                        ctx: context
+                    });
+                }
+            }
+
+            // execute functions
+            if (funcs.length > 0) {
+                const msg = { role: 'system', components: [] };
+                for (let i of funcs) {
+                    if (!i.func || typeof i.func.call !== 'function') {
+                        throw new Error(`Function "${i.name}" is not registered on this agent.`);
+                    }
+
+                    const res = await i.func.call(i.args, i.ctx);
+                    const component = {
+                        type: 'function_response',
+                        name: i.name,
+                        result: res.result,
+                        meta: res.meta
+                    };
+                    msg.components.push(component);
+                    yield { type: 'component', component: component };
+                }
+                conversation.conversation.push(msg);
+                yield { type: 'end', conversation };
+                return conversation;
+            }
+        }
+
+        // build body
+        const body = await this._buildBody(agent, conversation, context, options);
+
+        // start response
+        const maxActions = options.maxActions ?? this.options.maxActions ?? 24;
+        const meta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
+        const msg = { role: 'model', components: [] };
+
+        for (let i = 0; i < maxActions; i++) {
+            const res = await request('POST', `${this.service.baseUrl}/models/${encodeURIComponent(this.name)}/stream_interact`, JSON.stringify(body), {
+                'Authorization': options.auth ?? this.options.auth,
+                'Content-Type': 'application/json'
+            });
+
+            if (res.statusCode !== 200) throw _requestError(res);
+
+            const sse = res.sse();
+
+            // update metadata
+            meta.model = data.model;
+            meta.inputTotal += data.input_total;
+            meta.outputTotal += data.output_total;
+            meta.price += data.price;
+            meta.x = Object.assign(meta.x, data.x);
+
+            // push conversation
+            let ends = true;
+            if (data.message) {
+                const actionMsg = { role: 'model', components: [] };
+                const reactionMsg = { role: 'system', components: [] };
+                for (let j of data.message.components) {
+                    switch (j.type) {
+                        case 'text': // text component
+                        case 'file': // file component
+                        case 'action': // action component
+                        case 'function_response': // function response component
+                        case 'thought': // thought component
+                            msg.components.push(j);
+                            actionMsg.components.push(j);
+                            break;
+                        case 'function_call': // function call component
+                            if (agent._actions[j.name]) { // run as action
+                                const result = await agent._actions[j.name].call(j.arguments, context);
+
+                                msg.components.push({
+                                    type: 'action',
+                                    name: j.name,
+                                    action: j.arguments,
+                                    reaction: result.result,
+                                    reaction_attachments: result.attachments ?? [],
+                                    meta: result.meta,
+                                    x: j.x ?? {}
+                                });
+
+                                actionMsg.components.push(j);
+                                reactionMsg.components.push({ type: 'function_response', name: j.name, result: result.result, x: j.x ?? {} });
+
+                                ends = false; // generate again after action executed
+                            } else { // normal function call
+                                msg.components.push(j);
+                                actionMsg.components.push(j);
+                            }
+
+                            break;
+                    }
+                }
+                if (actionMsg.components.length > 0) body.conversation.push(actionMsg);
+                if (reactionMsg.components.length > 0) body.conversation.push(reactionMsg);
+            } else break;
+
+            // ends
+            if (ends) break;
+        }
+
+        // push to body
+        if (msg.components.length > 0) {
+            conversation.conversation.push(msg);
+        }
+
+        // set meta to conversation and return
+        conversation.meta = meta;
+        return conversation;
     }
 }
 

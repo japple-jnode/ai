@@ -4,7 +4,7 @@ v2
 
 Simple AI API package for Node.js.
 
-by Gemini (I'm not sure if they all works fine, but seems everything is correct. - from JA)
+by JustApple (I used to use Gemini to generate these, but it's code is stupid)
 */
 
 // dependencies
@@ -12,14 +12,22 @@ const AIAgent = require('./../agent.js');
 const AIConversation = require('./../conversation.js');
 const { request } = require('@jnode/request');
 
+// constants
+const THINKING_LEVELS = {
+    low: 'LOW',
+    medium: 'MEDIUM',
+    high: 'HIGH',
+    none: 'MINIMAL'
+};
+const CONTENT_ROLE = {
+    user: 'user',
+    model: 'model',
+    system: 'user'
+};
+
 // gemini model
 class GeminiModel {
     constructor(service, name, options = {}) {
-        if (typeof service === 'string') {
-            options = name || {};
-            name = service;
-            service = null;
-        }
         this.service = service;
         this.name = name;
         this.options = options;
@@ -76,7 +84,7 @@ class GeminiModel {
                     'text/rtf',
                     'application/pdf'
                 ],
-                actions: ['@googleSearch', '@codeExecution']
+                actions: ['@google_search', '@code_execution', '@url_context', '@google_maps']
             },
             inputPrice: null,
             outputPrice: null,
@@ -126,365 +134,300 @@ class GeminiModel {
             }
         }
 
-        const toolRegistry = await this._buildToolRegistry(agent);
-        const body = this._buildRequestBody(agent, options, toolRegistry);
-        body.contents = this._conversationToContents(conversation.conversation, agent, toolRegistry);
+        // get info
+        const info = await this.getInfo();
 
+        // generate request body
+        const body = {
+            generationConfig: {}
+        };
+
+        // basic config
+        body.generationConfig.temperature = agent.temperature;
+        body.generationConfig.topP = agent.topP;
+        body.generationConfig.topK = agent.topK;
+        body.generationConfig.seed = agent.seed;
+        body.generationConfig.maxOutputTokens = agent.outputLimit;
+        body.generationConfig.stopSequences = agent.stopStrings;
+        body.generationConfig.presencePenalty = agent.presencePenalty;
+        body.generationConfig.frequencyPenalty = agent.frequencyPenalty;
+        body.generationConfig.thinkingConfig = { thinkingLevel: THINKING_LEVELS[agent.thinkingLevel] };
+        body.generationConfig.responseMimeType = agent.responseSchema ? 'application/json' : 'text/plain';
+        body.generationConfig.responseJsonSchema = agent.responseSchema;
+        Object.assign(body.generationConfig, agent.x['gemini_generationConfig']); // assign generation config
+
+        // instructions
+        body.systemInstruction = agent.instructions && { parts: [{ text: agent.instructions }] };
+
+        // actions and functions
+        const functions = [];
+        body.tools = [];
+
+        for (let i of agent.actions) {
+            let fnInfo = i.getInfo();
+            if (fnInfo instanceof Promise) fnInfo = await fnInfo;
+
+            // native actions
+            if (fnInfo.name.startsWith('@') && info.features.actions.includes(fnInfo.name)) {
+                switch (fnInfo.name) {
+                    case '@google_search':
+                        body.tools.push({ googleSearch: fnInfo.config ?? {} });
+                        break;
+                    case '@code_execution':
+                        body.tools.push({ codeExecution: fnInfo.config ?? {} });
+                        break;
+                    case '@url_context':
+                        body.tools.push({ urlContext: fnInfo.config ?? {} });
+                        break;
+                    case '@google_maps':
+                        body.tools.push({ googleMaps: fnInfo.config ?? {} });
+                        break;
+                }
+            } else if (fnInfo.name.startsWith('@')) continue; // unsupported native action, skip
+            else functions.push(fnInfo);
+        }
+
+        for (let i of agent.functions) {
+            let fnInfo = i.getInfo();
+            if (fnInfo instanceof Promise) fnInfo = await fnInfo;
+            functions.push(fnInfo);
+        }
+
+        if (functions.length > 0) body.tools.push({ functionDeclarations: functions });
+
+        // build conversation
+        body.contents = [];
+        const conv = conversation.conversation;
+        for (let i = 0; i < conv.length; i++) {
+            let content = (body.contents[body.contents.length - 1]?.role === CONTENT_ROLE[conv[i].role]) ?
+                body.contents.pop() :
+                { role: CONTENT_ROLE[conv[i].role], parts: [] }; // new message if different role
+
+            for (let j of conv[i].components) {
+                switch (j.type) {
+                    case 'text':
+                        content.parts.push({ text: j.content, thoughtSignature: j.x?.gemini_thoughtSignature });
+                        break;
+                    case 'file':
+                        const mediaType = j.mediaType ?? j.media_type;
+                        if (!info.features.multimodalCapabilities.includes(mediaType)) {
+                            if (mediaType === 'text/plain') content.parts.push({ text: j.data.toString() });
+                            continue;
+                        }
+
+                        if (j.uri) { // uri data
+                            content.parts.push({
+                                fileData: {
+                                    mimeType: mediaType,
+                                    fileUri: j.uri
+                                }
+                            });
+                        } else if (j.data) { // inline data
+                            content.parts.push({
+                                inlineData: {
+                                    mimeType: mediaType,
+                                    data: Buffer.isBuffer(j.data) ? j.data.toString('base64') : j.data
+                                }
+                            });
+                        }
+
+                        break;
+                    case 'action': // action component
+                        if (typeof j.name === 'string' && j.name.startsWith('@')) {
+                            if (j.name === '@executable_code') { // code execution action
+                                content.parts.push({
+                                    executableCode: j.action,
+                                    thoughtSignature: j.x?.gemini_thoughtSignature
+                                });
+
+                                content.parts.push({
+                                    codeExecutionResult: j.reaction,
+                                    thoughtSignature: j.x?.gemini_thoughtSignature
+                                });
+                            } else continue;
+                        } else { // function like action
+                            content.parts.push({ functionCall: { name: j.name, args: j.action } });
+                            body.contents.push(content);
+
+                            content = { role: 'user', parts: [] }; // new user content for function response
+                            content.parts.push({
+                                functionResponse: {
+                                    name: j.name, response: j.reaction,
+                                    parts: (j.attachments ?? []).map(e => ({
+                                        inlineData: {
+                                            mimeType: e.media_type,
+                                            data: Buffer.isBuffer(e.data) ? e.data.toString('base64') : e.data
+                                        }
+                                    })),
+                                    ...j.x?.gemini_functionResponse
+                                }
+                            });
+                            body.contents.push(content);
+
+                            content = { role: 'model', parts: [] }; // new content for next components
+                        }
+                        break;
+                    case 'function_call': // function call component
+                        content.parts.push({ functionCall: { name: j.name, args: j.arguments }, thoughtSignature: j.x?.gemini_thoughtSignature ?? 'skip_thought_signature_validator' });
+                        break;
+                    case 'function_response': // function response component
+                        content.parts.push({
+                            functionResponse: {
+                                name: j.name, response: j.result,
+                                parts: (j.attachments ?? []).map(e => ({
+                                    inlineData: {
+                                        mimeType: e.media_type,
+                                        data: Buffer.isBuffer(e.data) ? e.data.toString('base64') : e.data
+                                    }
+                                })),
+                                ...j.x?.gemini_functionResponse
+                            }
+                        });
+                        break;
+                    case 'thought': // thought component
+                        content.parts.push({ thought: true, text: j.content, thoughtSignature: j.x?.gemini_thoughtSignature });
+                        break;
+                }
+            }
+
+            if (content.parts.length > 0) body.contents.push(content);
+        }
+
+        // addition fields
+        Object.assign(body, agent.x['gemini_body']);
+
+        // start response
         const maxActions = options.maxActions ?? this.options.maxActions ?? 24;
         const meta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
         const msg = { role: 'model', components: [] };
 
         for (let i = 0; i < maxActions; i++) {
-            const data = await this._request(body, options);
-
-            const candidate = data.candidates?.[0];
-            const content = candidate?.content;
-            if (!content && !candidate) break;
-
-            meta.model = data.modelVersion ?? meta.model;
-            meta.inputTotal += data.usageMetadata?.promptTokenCount ?? 0;
-            meta.outputTotal += data.usageMetadata?.candidatesTokenCount ?? 0;
-            meta.x = Object.assign(meta.x, {
-                finishReason: candidate?.finishReason,
-                safetyRatings: candidate?.safetyRatings,
-                usageMetadata: data.usageMetadata
+            const res = await request('POST', `${this.service.baseUrl}/models/${encodeURIComponent(this.name)}:generateContent`, JSON.stringify(body), {
+                'x-goog-api-key': options.auth ?? this.options.auth,
+                'Content-Type': 'application/json'
             });
 
+            if (res.statusCode !== 200) throw _requestError(res);
+
+            const data = await res.json();
+
+            // update metadata
+            meta.model = data.modelVersion;
+            meta.inputTotal += data.usageMetadata?.promptTokenCount;
+            meta.outputTotal += data.usageMetadata?.candidatesTokenCount;
+            meta.price += data.usageMetadata?.totalTokenCount; // do not use this field
+
+            // push conversation
             let ends = true;
-            const actionMsg = { role: 'model', parts: [] };
-            const reactionMsg = { role: 'user', parts: [] };
+            const candidate = data.candidates?.[0];
+            if (candidate?.content) {
+                const actionContent = { role: 'model', parts: [] };
+                const reactionContent = { role: 'user', parts: [] };
 
-            if (content?.parts) {
-                for (let part of content.parts) {
-                    actionMsg.parts.push(part);
-
-                    if (part.text) {
-                        msg.components.push({ type: 'text', content: part.text });
-                    }
-
-                    if (part.executable_code) {
+                for (let j of candidate.content.parts) {
+                    if (j.text) { // text or thought component
                         msg.components.push({
-                            type: 'thought',
-                            content: `Code Execution: \n\`\`\`${part.executable_code.language}\n${part.executable_code.code}\n\`\`\``,
-                            x: { executable_code: part.executable_code }
+                            type: j.thought ? 'thought' : 'text',
+                            content: j.text,
+                            x: { gemini_thoughtSignature: j.thoughtSignature }
                         });
-                    }
-
-                    if (part.code_execution_result) {
+                        actionContent.parts.push(j);
+                    } else if (j.inlineData) { // inline file data
                         msg.components.push({
-                            type: 'thought',
-                            content: `Result: ${part.code_execution_result.outcome}\n${part.code_execution_result.output}`,
-                            x: { code_execution_result: part.code_execution_result }
+                            type: 'file',
+                            mediaType: j.inlineData.mimeType,
+                            data: j.inlineData.data
                         });
-                    }
+                        actionContent.parts.push(j);
+                    } else if (j.fileData) { // file uri data
+                        msg.components.push({
+                            type: 'file',
+                            mediaType: j.fileData.mimeType,
+                            uri: j.fileData.fileUri
+                        });
+                        actionContent.parts.push(j);
+                    } else if (j.functionCall) {
+                        if (agent._actions[j.functionCall.name]) { // run as action
+                            const result = await agent._actions[j.functionCall.name].call(j.functionCall.args, context);
 
-                    if (part.function_call) {
-                        const call = part.function_call;
-                        const originalName = toolRegistry.byApiName.get(call.name)?.name ?? call.name;
-                        const args = typeof call.args === 'string' ? _parseToolArguments(call.args) : call.args;
-
-                        const action = agent._actions[originalName];
-                        if (action) {
-                            const result = await action.call(args, context);
                             msg.components.push({
                                 type: 'action',
-                                name: originalName,
-                                action: args,
+                                name: j.functionCall.name,
+                                action: j.functionCall.args,
                                 reaction: result.result,
-                                meta: result.meta
+                                reaction_attachments: result.attachments ?? [],
+                                meta: result.meta,
+                                x: j.x ?? {}
                             });
 
-                            reactionMsg.parts.push({
-                                function_response: {
-                                    name: call.name,
-                                    response: _formatFunctionResponse(result.result)
+                            actionContent.parts.push(j);
+                            reactionContent.parts.push({
+                                functionResponse: {
+                                    name: j.functionCall.name,
+                                    response: result.result,
+                                    parts: (j.attachments ?? []).map(e => ({
+                                        inlineData: {
+                                            mimeType: e.media_type,
+                                            data: Buffer.isBuffer(e.data) ? e.data.toString('base64') : e.data
+                                        }
+                                    })),
                                 }
                             });
-                            ends = false;
-                        } else {
+
+                            ends = false; // generate again after action executed
+                        } else { // normal function call
                             msg.components.push({
                                 type: 'function_call',
-                                name: originalName,
-                                arguments: args
+                                name: j.functionCall.name,
+                                arguments: j.functionCall.args,
+                                x: {
+                                    gemini_thoughtSignature: j.x?.gemini_thoughtSignature ?? 'skip_thought_signature_validator'
+                                }
                             });
+                            actionMsg.components.push(j);
                         }
+                    } else if (j.functionResponse) { // function response
+                        msg.components.push({
+                            type: 'function_response',
+                            name: j.functionResponse.name,
+                            result: j.functionResponse.response,
+                            attachments: (j.functionResponse.parts ?? []).map(e => ({
+                                media_type: e.inlineData.mimeType,
+                                data: e.inlineData.data
+                            })),
+                            x: j.x?.gemini_functionResponse
+                        });
+                        actionContent.parts.push(j);
+                    } else if (j.executableCode) { // code execution
+                        msg.components.push({
+                            type: 'action',
+                            name: '@executable_code',
+                            action: j.executableCode,
+                            x: { gemini_thoughtSignature: j.x?.gemini_thoughtSignature }
+                        });
+                        actionContent.parts.push(j);
+                    } else if (j.codeExecutionResult) { // code execution result
+                        msg.components[msg.components.length - 1].reaction = j.codeExecutionResult;
+                        actionContent.parts.push(j);
                     }
                 }
-            }
+                if (actionContent.parts.length > 0) body.contents.push(actionContent);
+                if (reactionContent.parts.length > 0) body.contents.push(reactionMsg);
+            } else break;
 
-            if (actionMsg.parts.length > 0) {
-                body.contents.push(actionMsg);
-            }
-            if (reactionMsg.parts.length > 0) {
-                body.contents.push(reactionMsg);
-            }
-
+            // ends
             if (ends) break;
         }
 
+        // push to body
         if (msg.components.length > 0) {
             conversation.conversation.push(msg);
         }
 
+        // set meta to conversation and return
         conversation.meta = meta;
         return conversation;
     }
-
-    async _buildToolRegistry(agent) {
-        const registry = {
-            tools: [],
-            byApiName: new Map()
-        };
-
-        const sources = [...agent.actions, ...agent.functions];
-        for (let item of sources) {
-            let info = item.getInfo();
-            if (info instanceof Promise) info = await info;
-
-            if (info.name.startsWith('@')) continue;
-
-            const apiName = info.name.slice(0, 64);
-            registry.byApiName.set(apiName, {
-                name: info.name,
-                apiName,
-                item,
-                info
-            });
-
-            registry.tools.push({
-                name: apiName,
-                description: info.description || 'Function',
-                parameters: info.parameters || { type: 'object', properties: {} }
-            });
-        }
-
-        return registry;
-    }
-
-    _buildRequestBody(agent, options, toolRegistry) {
-        const body = {};
-
-        const generationConfig = {};
-        if (agent.temperature !== undefined) generationConfig.temperature = agent.temperature;
-        if (agent.topP !== undefined) generationConfig.topP = agent.topP;
-        if (agent.topK !== undefined) generationConfig.topK = agent.topK;
-        if (agent.seed !== undefined) generationConfig.seed = agent.seed;
-        if (agent.outputLimit !== undefined) generationConfig.maxOutputTokens = agent.outputLimit;
-        if (agent.stopStrings !== undefined) generationConfig.stopSequences = agent.stopStrings;
-        if (agent.presencePenalty !== undefined) generationConfig.presencePenalty = agent.presencePenalty;
-        if (agent.frequencyPenalty !== undefined) generationConfig.frequencyPenalty = agent.frequencyPenalty;
-
-        if (agent.responseSchema) {
-            generationConfig.responseMimeType = 'application/json';
-            generationConfig.responseSchema = _mapResponseSchema(agent.responseSchema);
-        }
-
-        const thinkingConfig = _mapThinkingConfig(agent.thinkingLevel);
-        if (thinkingConfig) {
-            generationConfig.thinkingConfig = thinkingConfig;
-        }
-
-        if (agent.instructions) {
-            body.systemInstruction = {
-                parts: [{ text: agent.instructions }]
-            };
-        }
-
-        const tools = [];
-        let functionDeclarations = [];
-
-        for (let t of toolRegistry.tools) {
-            functionDeclarations.push(t);
-        }
-
-        if (functionDeclarations.length > 0) {
-            tools.push({ functionDeclarations });
-        }
-
-        if (agent._actions['@googleSearch']) {
-            tools.push({ googleSearch: {} });
-        }
-        if (agent._actions['@codeExecution']) {
-            tools.push({ codeExecution: {} });
-        }
-
-        if (tools.length > 0) {
-            body.tools = tools;
-            body.toolConfig = options.toolConfig ?? this.options.toolConfig;
-        }
-
-        Object.assign(body, this.options.x?.request ?? {}, agent.x?.request ?? {}, options.x?.request ?? {});
-        return body;
-    }
-
-    _conversationToContents(conversation, agent, toolRegistry) {
-        const contents = [];
-        let currentRole = null;
-        let currentParts = [];
-
-        const pushContent = () => {
-            if (currentParts.length > 0) {
-                contents.push({
-                    role: currentRole,
-                    parts: currentParts
-                });
-                currentParts = [];
-            }
-        };
-
-        for (let msg of conversation) {
-            let role = msg.role === 'model' ? 'model' : 'user';
-
-            if (currentRole !== role && currentParts.length > 0) {
-                pushContent();
-            }
-            currentRole = role;
-
-            for (let part of msg.components) {
-                if (part.type === 'text' || part.type === 'thought') {
-                    if (part.content) currentParts.push({ text: part.content });
-                    continue;
-                }
-
-                if (part.type === 'file') {
-                    const mapped = _mapUserFilePart(part);
-                    if (mapped) currentParts.push(mapped);
-                    continue;
-                }
-
-                if (part.type === 'function_call') {
-                    const apiName = [...toolRegistry.byApiName.values()].find((i) => i.name === part.name)?.apiName ?? part.name;
-                    currentParts.push({
-                        function_call: {
-                            name: apiName,
-                            args: part.arguments || {}
-                        }
-                    });
-                    continue;
-                }
-
-                if (part.type === 'action') {
-                    const apiName = [...toolRegistry.byApiName.values()].find((i) => i.name === part.name)?.apiName ?? part.name;
-                    currentParts.push({
-                        function_call: {
-                            name: apiName,
-                            args: part.action || {}
-                        }
-                    });
-                    pushContent();
-
-                    contents.push({
-                        role: 'user',
-                        parts: [{
-                            function_response: {
-                                name: apiName,
-                                response: _formatFunctionResponse(part.reaction)
-                            }
-                        }]
-                    });
-                    continue;
-                }
-
-                if (part.type === 'function_response') {
-                    const apiName = [...toolRegistry.byApiName.values()].find((i) => i.name === part.name)?.apiName ?? part.name;
-                    currentParts.push({
-                        function_response: {
-                            name: apiName,
-                            response: _formatFunctionResponse(part.result)
-                        }
-                    });
-                    continue;
-                }
-            }
-        }
-
-        pushContent();
-
-        const mergedContents = [];
-        for (let content of contents) {
-            if (mergedContents.length > 0 && mergedContents[mergedContents.length - 1].role === content.role) {
-                mergedContents[mergedContents.length - 1].parts.push(...content.parts);
-            } else {
-                mergedContents.push(content);
-            }
-        }
-
-        return mergedContents;
-    }
-
-    async _request(body, options = {}) {
-        let authHeader = options.auth ?? this.options.auth ?? this.service?.options?.auth;
-        let apiKey = authHeader;
-
-        let url = `${this.service?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta'}/models/${encodeURIComponent(this.name)}:generateContent`;
-
-        const headers = {
-            'Content-Type': 'application/json'
-        };
-
-        if (apiKey) {
-            if (apiKey.startsWith('Bearer ')) apiKey = apiKey.slice(7);
-            headers['x-goog-api-key'] = apiKey;
-        } else if (process.env.GEMINI_API_KEY) {
-            headers['x-goog-api-key'] = process.env.GEMINI_API_KEY;
-        }
-
-        const res = await request('POST', url, JSON.stringify(body), headers);
-
-        if (res.statusCode !== 200) throw _requestError(res);
-        return await res.json();
-    }
-}
-
-function _mapThinkingConfig(level) {
-    if (typeof level === 'number') return { thinkingBudget: level };
-    if (level === 'low') return { thinkingLevel: 'LOW' };
-    if (level === 'medium') return { thinkingLevel: 'MEDIUM' };
-    if (level === 'high') return { thinkingLevel: 'HIGH' };
-    if (level === 'none') return { thinkingLevel: 'MINIMAL' };
-    return null;
-}
-
-function _mapResponseSchema(schema) {
-    if (schema.type && schema.type !== 'json_schema') return schema;
-    if (schema.json_schema?.schema) return schema.json_schema.schema;
-    return schema;
-}
-
-function _mapUserFilePart(part) {
-    const mediaType = part.mediaType ?? part.media_type;
-    const data = Buffer.isBuffer(part.data) ? part.data.toString('base64') : part.data;
-
-    if (part.uri && part.uri.startsWith('https://generativelanguage.googleapis.com/')) {
-        return {
-            file_data: {
-                mime_type: mediaType,
-                file_uri: part.uri
-            }
-        };
-    } else if (data) {
-        return {
-            inline_data: {
-                mime_type: mediaType,
-                data: data
-            }
-        };
-    }
-    return null;
-}
-
-function _parseToolArguments(args) {
-    if (typeof args !== 'string') return args ?? {};
-    try {
-        return JSON.parse(args);
-    } catch {
-        return args;
-    }
-}
-
-function _formatFunctionResponse(res) {
-    if (typeof res === 'object' && res !== null && !Array.isArray(res)) return res;
-    return { result: res ?? null };
 }
 
 function _requestError(res) {

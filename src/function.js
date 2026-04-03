@@ -132,10 +132,11 @@ class AINativeAction {
 
 // function response
 class AIFunctionResponse {
-    constructor(status, name, result, meta = {}) {
+    constructor(status, name, result, attachments = [], meta = {}) {
         this.status = status; // "success", "error" or "blocked"
         this.name = name; // function name
         this.result = result; // function result
+        this.attachments = attachments; // function result attachment files
         this.meta = meta; // additional meta info
     }
 }

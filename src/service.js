@@ -29,7 +29,7 @@ class AIService {
 
         if (res.statusCode !== 200) throw _requestError(res);
 
-        
+
     }
 }
 

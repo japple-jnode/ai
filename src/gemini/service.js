@@ -18,7 +18,7 @@ class GeminiService {
     }
 
     model(name, options) {
-        return new GeminiModel(name, { ...this.options, ...options });
+        return new GeminiModel(this, name, { ...this.options, ...options });
     }
 }
 
