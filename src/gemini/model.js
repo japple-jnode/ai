@@ -4,7 +4,8 @@ v2
 
 Simple AI API package for Node.js.
 
-by JustApple (I used to use Gemini to generate these, but it's code is stupid)
+by JustApple (GeminiModel.interact, I used to use Gemini to generate these, but doesn't work well)
+   Gemini    (GeminiModel.streamInteract)
 */
 
 // dependencies
