@@ -98,42 +98,8 @@ class GeminiModel {
         return this._info;
     }
 
-    async interact(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
-        if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
-
-        if (conversation.last?.role === 'model') {
-            const funcs = [];
-            for (let i of conversation.last.components) {
-                if (i.type !== 'function_call') continue;
-
-                const fn = agent._actions[i.name] ?? agent._functions[i.name];
-                if (!fn) continue;
-
-                funcs.push({
-                    name: i.name,
-                    func: fn,
-                    args: i.arguments,
-                    ctx: context
-                });
-            }
-
-            if (funcs.length > 0) {
-                const msg = { role: 'system', components: [] };
-                for (let i of funcs) {
-                    const res = await i.func.call(i.args, i.ctx);
-                    msg.components.push({
-                        type: 'function_response',
-                        name: i.name,
-                        result: res.result,
-                        meta: res.meta
-                    });
-                }
-                conversation.conversation.push(msg);
-                return conversation;
-            }
-        }
-
+    // build body
+    async _buildBody(agent, conversation, context, options) {
         // get info
         const info = await this.getInfo();
 
@@ -296,6 +262,48 @@ class GeminiModel {
         // addition fields
         Object.assign(body, agent.x['gemini_body']);
 
+        return body;
+    }
+
+    async interact(agent, conversation, context, options = {}) {
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
+
+        if (conversation.last?.role === 'model') {
+            const funcs = [];
+            for (let i of conversation.last.components) {
+                if (i.type !== 'function_call') continue;
+
+                const fn = agent._actions[i.name] ?? agent._functions[i.name];
+                if (!fn) continue;
+
+                funcs.push({
+                    name: i.name,
+                    func: fn,
+                    args: i.arguments,
+                    ctx: context
+                });
+            }
+
+            if (funcs.length > 0) {
+                const msg = { role: 'system', components: [] };
+                for (let i of funcs) {
+                    const res = await i.func.call(i.args, i.ctx);
+                    msg.components.push({
+                        type: 'function_response',
+                        name: i.name,
+                        result: res.result,
+                        meta: res.meta
+                    });
+                }
+                conversation.conversation.push(msg);
+                return conversation;
+            }
+        }
+
+        // build body
+        const body = await this._buildBody(agent, conversation, context, options);
+
         // start response
         const maxActions = options.maxActions ?? this.options.maxActions ?? 24;
         const meta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
@@ -384,7 +392,13 @@ class GeminiModel {
                                     gemini_thoughtSignature: j.x?.gemini_thoughtSignature ?? 'skip_thought_signature_validator'
                                 }
                             });
-                            actionMsg.components.push(j);
+                            actionContent.parts.push(j);
+                            reactionContent.parts.push({ // canceled
+                                functionResponse: {
+                                    name: j.functionCall.name,
+                                    response: options.canceledResult ?? this.options.canceledResult ?? { status: 'EXECUTION_CANCELED', message: 'Please run this function again.' }
+                                }
+                            });
                         }
                     } else if (j.functionResponse) { // function response
                         msg.components.push({

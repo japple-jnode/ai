@@ -277,6 +277,12 @@ class AIModel {
                             } else { // normal function call
                                 msg.components.push(j);
                                 actionMsg.components.push(j);
+                                reactionMsg.components.push({
+                                    type: 'function_response',
+                                    name: j.name,
+                                    result: options.canceledResult ?? this.options.canceledResult ?? { status: 'EXECUTION_CANCELED', message: 'Please run this function again.' },
+                                    x: j.x ?? {}
+                                });
                             }
 
                             break;
@@ -362,33 +368,37 @@ class AIModel {
 
             const sse = res.sse();
 
-            // update metadata
-            meta.model = data.model;
-            meta.inputTotal += data.input_total;
-            meta.outputTotal += data.output_total;
-            meta.price += data.price;
-            meta.x = Object.assign(meta.x, data.x);
+            const requestMeta = { model: this.name, inputTotal: 0, outputTotal: 0, price: 0, x: {} };
+            let last;
+            let current = {};
 
-            // push conversation
             let ends = true;
-            if (data.message) {
-                const actionMsg = { role: 'model', components: [] };
-                const reactionMsg = { role: 'system', components: [] };
-                for (let j of data.message.components) {
-                    switch (j.type) {
+            const actionMsg = { role: 'model', components: [] };
+            const reactionMsg = { role: 'system', components: [] };
+            for await (let event of sse) {
+                const data = JSON.parse(event.data);
+
+                // update request meta
+                Object.assign(requestMeta, data.meta);
+
+                // starts a new component
+                if (data.event.type === 'component') {
+                    current = data.event.component;
+                    switch (current.type) {
                         case 'text': // text component
                         case 'file': // file component
                         case 'action': // action component
                         case 'function_response': // function response component
                         case 'thought': // thought component
-                            msg.components.push(j);
-                            actionMsg.components.push(j);
+                            msg.components.push(current);
+                            actionMsg.components.push(current);
+                            yield { type: 'component', component: current, last: last, meta: requestMeta };
                             break;
                         case 'function_call': // function call component
-                            if (agent._actions[j.name]) { // run as action
+                            if (agent._actions[current.name]) { // run as action
                                 const result = await agent._actions[j.name].call(j.arguments, context);
 
-                                msg.components.push({
+                                const component = {
                                     type: 'action',
                                     name: j.name,
                                     action: j.arguments,
@@ -396,23 +406,38 @@ class AIModel {
                                     reaction_attachments: result.attachments ?? [],
                                     meta: result.meta,
                                     x: j.x ?? {}
-                                });
+                                };
+                                msg.components.push(component);
+                                yield { type: 'component', component: component, last: last, meta: requestMeta };
 
-                                actionMsg.components.push(j);
-                                reactionMsg.components.push({ type: 'function_response', name: j.name, result: result.result, x: j.x ?? {} });
+                                actionMsg.components.push(current);
+                                reactionMsg.components.push({ type: 'function_response', name: current.name, result: result.result, x: current.x ?? {} });
 
                                 ends = false; // generate again after action executed
                             } else { // normal function call
-                                msg.components.push(j);
-                                actionMsg.components.push(j);
+                                msg.components.push(current);
+                                actionMsg.components.push(current);
+                                yield { type: 'component', component: current, last: last, meta: requestMeta };
                             }
 
                             break;
                     }
-                }
-                if (actionMsg.components.length > 0) body.conversation.push(actionMsg);
-                if (reactionMsg.components.length > 0) body.conversation.push(reactionMsg);
-            } else break;
+                    last = current;
+                } else if (data.event.type === 'continue') { // continue current component
+                    current.content += data.event.content ?? '';
+                    yield { type: 'continue', content: data.event.content, component: current, meta: requestMeta };
+                } else if (data.event.type === 'end') break; // end of response
+            }
+
+            if (actionMsg.components.length > 0) body.conversation.push(actionMsg);
+            if (reactionMsg.components.length > 0) body.conversation.push(reactionMsg);
+
+            // metadata update
+            meta.model = requestMeta.model;
+            meta.inputTotal += requestMeta.inputTotal;
+            meta.outputTotal += requestMeta.outputTotal;
+            meta.price += requestMeta.price;
+            meta.x = Object.assign(meta.x, requestMeta.x);
 
             // ends
             if (ends) break;
@@ -425,6 +450,7 @@ class AIModel {
 
         // set meta to conversation and return
         conversation.meta = meta;
+        yield { type: 'end', conversation, meta };
         return conversation;
     }
 }
