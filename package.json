@@ -8,8 +8,7 @@
     "./gemini": "./src/gemini/index.js",
     "./openai-chat": "./src/openai-chat/index.js",
     "./claude": "./src/claude/index.js",
-    "./openai-response": "./src/openai-response/index.js",
-    "./pollinations": "./src/pollinations/index.js"
+    "./openai-response": "./src/openai-response/index.js"
   },
   "scripts": {
     "test": "echo \"Hello, AI.\""
