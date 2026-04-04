@@ -65,6 +65,8 @@ class OAIChatModel {
             model: this.name,
             messages: []
         };
+        let toolCallId = 1;
+        const functionCallIds = [];
 
         if (agent.temperature !== undefined) body.temperature = agent.temperature;
         if (agent.topP !== undefined) body.top_p = agent.topP;
@@ -185,7 +187,9 @@ class OAIChatModel {
                     case 'action':
                         if (typeof j.name === 'string' && !j.name.startsWith('@')) {
                             if (!msg.tool_calls) msg.tool_calls = [];
-                            const callId = j.x?.openai_tool_call_id || `call_${Math.random().toString(36).substr(2, 9)}`;
+                            if (!j.x) j.x = {};
+                            if (!j.x.openai_tool_call_id) j.x.openai_tool_call_id = `call_${toolCallId++}`;
+                            const callId = j.x.openai_tool_call_id;
                             msg.tool_calls.push({
                                 id: callId,
                                 type: 'function',
@@ -202,20 +206,28 @@ class OAIChatModel {
                         }
                         break;
                     case 'function_call':
+                        if (!j.x) j.x = {};
+                        if (!j.x.openai_tool_call_id) j.x.openai_tool_call_id = `call_${toolCallId++}`;
                         if (!msg.tool_calls) msg.tool_calls = [];
                         msg.tool_calls.push({
-                            id: j.x?.openai_tool_call_id || `call_${Math.random().toString(36).substr(2, 9)}`,
+                            id: j.x.openai_tool_call_id,
                             type: 'function',
                             function: {
                                 name: j.name,
                                 arguments: typeof j.arguments === 'string' ? j.arguments : JSON.stringify(j.arguments)
                             }
                         });
+                        functionCallIds.push({ name: j.name, id: j.x.openai_tool_call_id });
                         break;
                     case 'function_response':
+                        if (!j.x) j.x = {};
+                        if (!j.x.openai_tool_call_id) {
+                            const call = functionCallIds.find((i) => i.name === j.name) || functionCallIds.shift();
+                            j.x.openai_tool_call_id = call?.id || `call_${toolCallId++}`;
+                        }
                         pendingToolResponses.push({
                             role: 'tool',
-                            tool_call_id: j.x?.openai_tool_call_id || `call_${Math.random().toString(36).substr(2, 9)}`,
+                            tool_call_id: j.x.openai_tool_call_id,
                             content: typeof j.result === 'string' ? j.result : JSON.stringify(j.result)
                         });
                         break;
@@ -488,7 +500,7 @@ class OAIChatModel {
             let reactionMsgs = [];
 
             let lastComponent = null;
-            let activeToolCalls = {}; // index -> component
+            let activeToolCalls = {}; // index -> raw tool call
 
             for await (let event of sse) {
                 if (!event.data || event.data === '[DONE]') continue;
@@ -554,23 +566,16 @@ class OAIChatModel {
                 if (delta.tool_calls) {
                     for (let tc of delta.tool_calls) {
                         if (!activeToolCalls[tc.index]) {
-                            const component = {
-                                type: 'function_call',
+                            activeToolCalls[tc.index] = {
+                                id: tc.id,
                                 name: tc.function?.name ?? '',
-                                arguments: tc.function?.arguments ?? '',
-                                x: { openai_tool_call_id: tc.id }
+                                arguments: tc.function?.arguments ?? ''
                             };
-                            activeToolCalls[tc.index] = component;
-                            msg.components.push(component);
-                            yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
-                            lastComponent = component;
                         } else {
                             const component = activeToolCalls[tc.index];
+                            if (tc.id) component.id = tc.id;
                             if (tc.function?.name) component.name += tc.function.name;
-                            if (tc.function?.arguments) {
-                                component.arguments += tc.function.arguments;
-                                yield { type: 'continue', content: tc.function.arguments, component: component, meta: requestMeta };
-                            }
+                            if (tc.function?.arguments) component.arguments += tc.function.arguments;
                         }
                     }
                 }
@@ -580,11 +585,13 @@ class OAIChatModel {
             let hasAction = false;
             let hasUnhandledFunction = false;
 
-            const toolCallValues = Object.values(activeToolCalls);
+            const toolCallValues = Object.keys(activeToolCalls)
+                .sort((a, b) => Number(a) - Number(b))
+                .map((i) => activeToolCalls[i]);
             if (toolCallValues.length > 0) {
                 for (let tc of toolCallValues) {
                     actionMsg.tool_calls.push({
-                        id: tc.x.openai_tool_call_id,
+                        id: tc.id,
                         type: 'function',
                         function: {
                             name: tc.name,
@@ -600,26 +607,44 @@ class OAIChatModel {
                     }
 
                     if (agent._actions[tc.name]) {
-                        tc.type = 'action';
-                        tc.action = args;
+                        const component = {
+                            type: 'action',
+                            name: tc.name,
+                            action: args,
+                            x: { openai_tool_call_id: tc.id }
+                        };
+                        msg.components.push(component);
+                        yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                        lastComponent = component;
 
                         const result = await agent._actions[tc.name].call(args, context);
 
-                        tc.reaction = result.result;
-                        tc.reaction_attachments = result.attachments ?? [];
-                        tc.meta = result.meta;
+                        component.reaction = result.result;
+                        component.reaction_attachments = result.attachments ?? [];
+                        component.meta = result.meta;
+                        yield { type: 'continue', reaction: result.result, component: component, meta: requestMeta };
 
                         reactionMsgs.push({
                             role: 'tool',
-                            tool_call_id: tc.x.openai_tool_call_id,
+                            tool_call_id: tc.id,
                             content: typeof result.result === 'string' ? result.result : JSON.stringify(result.result)
                         });
 
                         hasAction = true;
                     } else { // normal function call
+                        const component = {
+                            type: 'function_call',
+                            name: tc.name,
+                            arguments: args,
+                            x: { openai_tool_call_id: tc.id }
+                        };
+                        msg.components.push(component);
+                        yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+                        lastComponent = component;
+
                         reactionMsgs.push({
                             role: 'tool',
-                            tool_call_id: tc.x.openai_tool_call_id,
+                            tool_call_id: tc.id,
                             content: JSON.stringify(options.canceledResult ?? this.options.canceledResult ?? { status: 'EXECUTION_CANCELED', message: 'Please run this function again.' })
                         });
                         hasUnhandledFunction = true;
