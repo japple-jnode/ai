@@ -27,10 +27,6 @@ class ClaudeModel {
         this._info = options.info;
     }
 
-    // -------------------------------------------------------------------------
-    // getInfo — hard-coded capabilities (Claude has no public model-info REST
-    // endpoint that maps cleanly to the AIModel schema).
-    // -------------------------------------------------------------------------
     async getInfo() {
         if (this._info) return this._info;
 
@@ -50,7 +46,7 @@ class ClaudeModel {
                     'image/gif',
                     'application/pdf'
                 ],
-                actions: [] // Claude has no built-in native actions in this schema
+                actions: ['@code_execution'] // there should be more, add them!
             },
             inputPrice: null,
             outputPrice: null,

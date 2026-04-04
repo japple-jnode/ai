@@ -578,19 +578,22 @@ class GeminiModel {
                         actionContent.parts.push(j);
                     } else if (j.functionCall) {
                         if (agent._actions[j.functionCall.name]) { // run as action
-                            const result = await agent._actions[j.functionCall.name].call(j.functionCall.args, context);
-
                             const component = {
                                 type: 'action',
                                 name: j.functionCall.name,
                                 action: j.functionCall.args,
-                                reaction: result.result,
-                                reaction_attachments: result.attachments ?? [],
-                                meta: result.meta,
                                 x: j.x ?? {}
                             };
-                            msg.components.push(component);
                             yield { type: 'component', component: component, last: lastComponent, meta: requestMeta };
+
+                            const result = await agent._actions[j.functionCall.name].call(j.functionCall.args, context);
+
+                            component.reaction = result.result;
+                            component.reaction_attachments = result.attachments ?? [];
+                            component.meta = result.meta;
+
+                            msg.components.push(component);
+                            yield { type: 'continue', reaction: result.result, component: component, meta: requestMeta };
                             lastComponent = component;
                             actionContent.parts.push(j);
 

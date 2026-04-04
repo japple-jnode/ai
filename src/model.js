@@ -396,19 +396,23 @@ class AIModel {
                             break;
                         case 'function_call': // function call component
                             if (agent._actions[current.name]) { // run as action
-                                const result = await agent._actions[j.name].call(j.arguments, context);
-
                                 const component = {
                                     type: 'action',
                                     name: j.name,
                                     action: j.arguments,
-                                    reaction: result.result,
-                                    reaction_attachments: result.attachments ?? [],
-                                    meta: result.meta,
                                     x: j.x ?? {}
                                 };
-                                msg.components.push(component);
                                 yield { type: 'component', component: component, last: last, meta: requestMeta };
+
+
+                                const result = await agent._actions[j.name].call(j.arguments, context);
+
+                                component.reaction = result.result;
+                                component.meta = result.meta;
+                                component.reaction_attachments = result.attachments ?? [];
+
+                                msg.components.push(component);
+                                yield { type: 'continue', reaction: result.result, component: component, meta: requestMeta };
 
                                 actionMsg.components.push(current);
                                 reactionMsg.components.push({ type: 'function_response', name: current.name, result: result.result, x: current.x ?? {} });
