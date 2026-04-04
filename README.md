@@ -23,7 +23,7 @@ const { ClaudeService } = require('@jnode/ai/claude');
 ### Start a simple conversation
 
 ```js
-const { OAIChatService, AIAgent } = require('@jnode/ai/openai-chat');
+const { OAIChatService } = require('@jnode/ai/openai-chat');
 
 const service = new OAIChatService({ auth: 'sk-your-openai-api-key' });
 const model = service.model('gpt-4o');
