@@ -12,8 +12,8 @@ const ClaudeModel = require('./model.js');
 
 // claude service
 class ClaudeService {
-    constructor(baseUrl = 'https://api.anthropic.com/v1', options = {}) {
-        this.baseUrl = baseUrl;
+    constructor(options = {}) {
+        this.baseUrl = options.baseUrl ?? 'https://api.anthropic.com/v1';
         this.options = options;
     }
 

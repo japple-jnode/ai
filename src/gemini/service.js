@@ -12,8 +12,8 @@ const GeminiModel = require('./model.js');
 
 // gemini service
 class GeminiService {
-    constructor(baseUrl = 'https://generativelanguage.googleapis.com/v1beta', options = {}) {
-        this.baseUrl = baseUrl;
+    constructor(options = {}) {
+        this.baseUrl = options.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
         this.options = options;
     }
 

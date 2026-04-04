@@ -13,8 +13,8 @@ const { request } = require('@jnode/request');
 
 // basic jai service
 class AIService {
-    constructor(baseUrl, options = {}) {
-        this.baseUrl = baseUrl;
+    constructor(options = {}) {
+        this.baseUrl = options.baseUrl ?? 'https://ai.justapple.tw/api';
         this.options = options;
     }
 

@@ -12,8 +12,8 @@ const OAIChatModel = require('./model.js');
 
 // openai chat completion service
 class OAIChatService {
-    constructor(baseUrl = 'https://api.openai.com/v1', options = {}) {
-        this.baseUrl = baseUrl;
+    constructor(options = {}) {
+        this.baseUrl = options.baseUrl ?? 'https://api.openai.com/v1';
         this.options = options;
     }
 
