@@ -11,6 +11,7 @@ by JustApple
 class AIAgent {
     constructor(model, agent = {}) {
         this.model = model;
+        agent = { ...this.model.agent, ...agent };
 
         // agent options, must be accepted in any service
 
