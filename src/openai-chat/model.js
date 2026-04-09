@@ -14,6 +14,9 @@ const AIAgent = require('./../agent.js');
 const AIConversation = require('./../conversation.js');
 const { request } = require('@jnode/request');
 
+// constants
+const LEVEL_MAP = { 'low': 'low', 'medium': 'medium', 'high': 'high' };
+
 // openai chat completion model
 class OAIChatModel {
     constructor(service, name, options = {}) {
@@ -21,6 +24,22 @@ class OAIChatModel {
         this.name = name;
         this.options = options;
         this._info = options.info;
+
+        // generation configs
+        this.temperature = options.temperature; // temperature, 0.0~2.0
+        this.topP = options.topP ?? options.top_p; // top p, 0.0~1.0
+        this.topK = options.topK ?? options.top_k; // top k, >= 1
+        this.seed = options.seed; // seed
+        this.outputLimit = options.outputLimit ?? options.output_limit; // max output token limit
+        this.stopStrings = options.stopStrings ?? options.stop_strings; // strings that will make model stop outputting
+        this.logprobs = options.logprobs; // logprobs
+        this.frequencyPenalty = options.frequencyPenalty ?? options.frequency_penalty; // frequency penalty, -2.0~2.0
+        this.presencePenalty = options.presencePenalty ?? options.presence_penalty; // presence penalty, -2.0~2.0
+        this.thinkingLevel = options.thinkingLevel ?? options.thinking_level; // thinking level, "none" / "low" / "medium" / "high"
+        this.responseSchema = options.responseSchema ?? options.response_schema; // response schema in JSON Schema for formatted JSON output
+
+        // core instructions, commonly called system prompt
+        this.instructions = options.instructions;
     }
 
     async getInfo() {
@@ -68,25 +87,24 @@ class OAIChatModel {
         let toolCallId = 1;
         const functionCallIds = [];
 
-        if (agent.temperature !== undefined) body.temperature = agent.temperature;
-        if (agent.topP !== undefined) body.top_p = agent.topP;
-        if (agent.outputLimit !== undefined) body.max_completion_tokens = agent.outputLimit;
-        if (agent.stopStrings !== undefined) body.stop = agent.stopStrings;
-        if (agent.presencePenalty !== undefined) body.presence_penalty = agent.presencePenalty;
-        if (agent.frequencyPenalty !== undefined) body.frequency_penalty = agent.frequencyPenalty;
-        if (agent.seed !== undefined) body.seed = agent.seed;
+        body.temperature = agent.temperature ?? this.temperature;
+        body.top_p = agent.topP ?? this.topP;
+        body.max_completion_tokens = agent.outputLimit ?? this.outputLimit;
+        body.stop = agent.stopStrings ?? this.stopStrings;
+        body.presence_penalty = agent.presencePenalty ?? this.presencePenalty;
+        body.frequency_penalty = agent.frequencyPenalty ?? this.frequencyPenalty;
+        body.seed = agent.seed ?? this.seed;
 
         if (agent.thinkingLevel !== undefined) {
-            const levelMap = { 'low': 'low', 'medium': 'medium', 'high': 'high' };
-            if (levelMap[agent.thinkingLevel]) body.reasoning_effort = levelMap[agent.thinkingLevel];
+            body.reasoning_effort = LEVEL_MAP[agent.thinkingLevel ?? this.thinkingLevel];
         }
 
-        if (agent.responseSchema) {
+        if (agent.responseSchema ?? this.responseSchema) {
             body.response_format = {
                 type: 'json_schema',
                 json_schema: {
                     name: 'json_response',
-                    schema: agent.responseSchema,
+                    schema: agent.responseSchema ?? this.responseSchema,
                     strict: true
                 }
             };
@@ -120,10 +138,10 @@ class OAIChatModel {
         }
         if (tools.length > 0) body.tools = tools;
 
-        if (agent.instructions) {
+        if (agent.instructions ?? this.instructions) {
             body.messages.push({
                 role: 'developer',
-                content: agent.instructions
+                content: agent.instructions ?? this.instructions
             });
         }
 
@@ -246,7 +264,7 @@ class OAIChatModel {
 
     // interact
     async interact(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         if (conversation.last?.role === 'model') {
@@ -431,7 +449,7 @@ class OAIChatModel {
 
     // stream interact
     async *streamInteract(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         // function executing if conversations ends with model turn with function call component

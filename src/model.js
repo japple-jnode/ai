@@ -18,6 +18,22 @@ class AIModel {
         this.service = service;
         this.name = name;
         this.options = options;
+
+        // generation configs
+        this.temperature = options.temperature; // temperature, 0.0~2.0
+        this.topP = options.topP ?? options.top_p; // top p, 0.0~1.0
+        this.topK = options.topK ?? options.top_k; // top k, >= 1
+        this.seed = options.seed; // seed
+        this.outputLimit = options.outputLimit ?? options.output_limit; // max output token limit
+        this.stopStrings = options.stopStrings ?? options.stop_strings; // strings that will make model stop outputting
+        this.logprobs = options.logprobs; // logprobs
+        this.frequencyPenalty = options.frequencyPenalty ?? options.frequency_penalty; // frequency penalty, -2.0~2.0
+        this.presencePenalty = options.presencePenalty ?? options.presence_penalty; // presence penalty, -2.0~2.0
+        this.thinkingLevel = options.thinkingLevel ?? options.thinking_level; // thinking level, "none" / "low" / "medium" / "high"
+        this.responseSchema = options.responseSchema ?? options.response_schema; // response schema in JSON Schema for formatted JSON output
+
+        // core instructions, commonly called system prompt
+        this.instructions = options.instructions;
     }
 
     async getInfo(options = {}) {
@@ -72,19 +88,21 @@ class AIModel {
         // generate request body
         const body = {};
 
-        // basic config
-        body.temperature = agent.temperature; // temperature, 0.0~2.0
-        body.top_p = agent.topP; // top p, 0.0~1.0
-        body.top_k = agent.topK; // top k, >= 1
-        body.seed = agent.seed; // seed
-        body.max_tokens = agent.outputLimit; // max output token limit
-        body.stop = agent.stopStrings; // strings that will make model stop outputting
-        body.logprobs = agent.logprobs; // logprobs
-        body.frequency_penalty = agent.frequencyPenalty; // frequency penalty, -2.0~2.0
-        body.presence_penalty = agent.presencePenalty; // presence penalty, -2.0~2.0
-        body.thinking_level = agent.thinkingLevel; // thinking level, "none" / "low" / "medium" / "high"
-        body.response_schema = agent.responseSchema; // response schema in JSON Schema for formatted JSON output
-        body.instructions = agent.instructions; // core instructions, commonly called system prompt
+        // basic model config
+        body.temperature = agent.temperature ?? this.temperature; // temperature, 0.0~2.0
+        body.top_p = agent.topP ?? this.topP; // top p, 0.0~1.0
+        body.top_k = agent.topK ?? this.topK; // top k, >= 1
+        body.seed = agent.seed ?? this.seed; // seed
+        body.max_tokens = agent.outputLimit ?? this.outputLimit; // max output token limit
+        body.logprobs = agent.logprobs ?? this.logprobs; // logprobs
+        body.frequency_penalty = agent.frequencyPenalty ?? this.frequencyPenalty; // frequency penalty, -2.0~2.0
+        body.presence_penalty = agent.presencePenalty ?? this.presencePenalty; // presence penalty, -2.0~2.0
+        body.thinking_level = agent.thinkingLevel ?? this.thinkingLevel; // thinking level, "none" / "low" / "medium" / "high"
+
+        // agent config
+        body.stop = agent.stopStrings ?? this.stopStrings; // strings that will make model stop outputting
+        body.response_schema = agent.responseSchema ?? this.responseSchema; // response schema in JSON Schema for formatted JSON output
+        body.instructions = agent.instructions ?? this.instructions; // core instructions, commonly called system prompt
 
         // actions and functions
         body.actions = [];
@@ -178,7 +196,7 @@ class AIModel {
     // interact with interactive model, every parameter must be followed
     async interact(agent, conversation, context, options = {}) {
         // init
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         // function executing if conversations ends with model turn with function call component
@@ -309,7 +327,7 @@ class AIModel {
     // stream interact
     async *streamInteract(agent, conversation, context, options = {}) {
         // init
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         // function executing if conversations ends with model turn with function call component

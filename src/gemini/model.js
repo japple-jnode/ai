@@ -33,6 +33,22 @@ class GeminiModel {
         this.name = name;
         this.options = options;
         this._info = options.info;
+
+        // generation configs
+        this.temperature = options.temperature; // temperature, 0.0~2.0
+        this.topP = options.topP ?? options.top_p; // top p, 0.0~1.0
+        this.topK = options.topK ?? options.top_k; // top k, >= 1
+        this.seed = options.seed; // seed
+        this.outputLimit = options.outputLimit ?? options.output_limit; // max output token limit
+        this.stopStrings = options.stopStrings ?? options.stop_strings; // strings that will make model stop outputting
+        this.logprobs = options.logprobs; // logprobs
+        this.frequencyPenalty = options.frequencyPenalty ?? options.frequency_penalty; // frequency penalty, -2.0~2.0
+        this.presencePenalty = options.presencePenalty ?? options.presence_penalty; // presence penalty, -2.0~2.0
+        this.thinkingLevel = options.thinkingLevel ?? options.thinking_level; // thinking level, "none" / "low" / "medium" / "high"
+        this.responseSchema = options.responseSchema ?? options.response_schema; // response schema in JSON Schema for formatted JSON output
+
+        // core instructions, commonly called system prompt
+        this.instructions = options.instructions;
     }
 
     async getInfo() {
@@ -110,21 +126,21 @@ class GeminiModel {
         };
 
         // basic config
-        body.generationConfig.temperature = agent.temperature;
-        body.generationConfig.topP = agent.topP;
-        body.generationConfig.topK = agent.topK;
-        body.generationConfig.seed = agent.seed;
-        body.generationConfig.maxOutputTokens = agent.outputLimit;
-        body.generationConfig.stopSequences = agent.stopStrings;
-        body.generationConfig.presencePenalty = agent.presencePenalty;
-        body.generationConfig.frequencyPenalty = agent.frequencyPenalty;
-        body.generationConfig.thinkingConfig = { thinkingLevel: THINKING_LEVELS[agent.thinkingLevel] };
-        body.generationConfig.responseMimeType = agent.responseSchema ? 'application/json' : 'text/plain';
-        body.generationConfig.responseJsonSchema = agent.responseSchema;
-        Object.assign(body.generationConfig, agent.x['gemini_generationConfig']); // assign generation config
+        body.generationConfig.temperature = agent.temperature ?? this.temperature;
+        body.generationConfig.topP = agent.topP ?? this.topP;
+        body.generationConfig.topK = agent.topK ?? this.topK;
+        body.generationConfig.seed = agent.seed ?? this.seed;
+        body.generationConfig.maxOutputTokens = agent.outputLimit ?? this.outputLimit;
+        body.generationConfig.stopSequences = agent.stopStrings ?? this.stopStrings;
+        body.generationConfig.presencePenalty = agent.presencePenalty ?? this.presencePenalty;
+        body.generationConfig.frequencyPenalty = agent.frequencyPenalty ?? this.frequencyPenalty;
+        body.generationConfig.thinkingConfig = { thinkingLevel: THINKING_LEVELS[agent.thinkingLevel ?? this.thinkingLevel] };
+        body.generationConfig.responseMimeType = agent.responseSchema ?? this.responseSchema ? 'application/json' : 'text/plain';
+        body.generationConfig.responseJsonSchema = agent.responseSchema ?? this.responseSchema;
+        Object.assign(body.generationConfig, agent.x['gemini_generationConfig'] ?? this.options.generationConfig); // assign generation config
 
         // instructions
-        body.systemInstruction = agent.instructions && { parts: [{ text: agent.instructions }] };
+        body.systemInstruction = (agent.instructions ?? this.instructions) && { parts: [{ text: agent.instructions ?? this.instructions }] };
 
         // actions and functions
         const functions = [];
@@ -268,7 +284,7 @@ class GeminiModel {
 
     // interact with model
     async interact(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         if (conversation.last?.role === 'model') {
@@ -447,7 +463,7 @@ class GeminiModel {
 
     // stream interact
     async *streamInteract(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         // function executing if conversations ends with model turn with function call component

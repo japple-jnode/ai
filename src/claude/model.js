@@ -37,6 +37,22 @@ class ClaudeModel {
         this.name = name;
         this.options = options;
         this._info = options.info;
+
+        // generation configs
+        this.temperature = options.temperature; // temperature, 0.0~2.0
+        this.topP = options.topP ?? options.top_p; // top p, 0.0~1.0
+        this.topK = options.topK ?? options.top_k; // top k, >= 1
+        this.seed = options.seed; // seed
+        this.outputLimit = options.outputLimit ?? options.output_limit; // max output token limit
+        this.stopStrings = options.stopStrings ?? options.stop_strings; // strings that will make model stop outputting
+        this.logprobs = options.logprobs; // logprobs
+        this.frequencyPenalty = options.frequencyPenalty ?? options.frequency_penalty; // frequency penalty, -2.0~2.0
+        this.presencePenalty = options.presencePenalty ?? options.presence_penalty; // presence penalty, -2.0~2.0
+        this.thinkingLevel = options.thinkingLevel ?? options.thinking_level; // thinking level, "none" / "low" / "medium" / "high"
+        this.responseSchema = options.responseSchema ?? options.response_schema; // response schema in JSON Schema for formatted JSON output
+
+        // core instructions, commonly called system prompt
+        this.instructions = options.instructions;
     }
 
     async getInfo() {
@@ -82,33 +98,33 @@ class ClaudeModel {
         };
 
         // generation config
-        if (agent.temperature !== undefined) body.temperature = agent.temperature;
-        if (agent.topP !== undefined) body.top_p = agent.topP;
-        if (agent.topK !== undefined) body.top_k = agent.topK;
-        if (agent.stopStrings?.length) body.stop_sequences = agent.stopStrings;
+        body.temperature = agent.temperature ?? this.temperature;
+        body.top_p = agent.topP ?? this.topP;
+        body.top_k = agent.topK ?? this.topK;
+        body.stop_sequences = agent.stopStrings ?? this.stopStrings;
 
         // extended thinking
-        if (agent.thinkingLevel && agent.thinkingLevel !== 'none') {
-            const budget = agent.x?.claude_budget_tokens
-                ?? THINKING_BUDGETS[agent.thinkingLevel]
+        if ((agent.thinkingLevel ?? this.thinkingLevel) && (agent.thinkingLevel ?? this.thinkingLevel) !== 'none') {
+            const budget = agent.x?.claude_budget_tokens ?? this.options?.claude_budget_tokens
+                ?? THINKING_BUDGETS[agent.thinkingLevel ?? this.thinkingLevel]
                 ?? THINKING_BUDGETS.medium;
             body.thinking = { type: 'enabled', budget_tokens: budget };
             // thinking requires temperature=1 — set only if not explicitly overridden
-            if (agent.temperature === undefined) body.temperature = 1;
+            body.temperature = agent.temperature ?? 1;
         }
 
         // structured output via output_config
-        if (agent.responseSchema) {
+        if (agent.responseSchema ?? this.responseSchema) {
             body.output_config = {
                 format: {
                     type: 'json_schema',
-                    schema: agent.responseSchema
+                    schema: agent.responseSchema ?? this.responseSchema
                 }
             };
         }
 
         // system prompt
-        if (agent.instructions) body.system = agent.instructions;
+        if (agent.instructions) body.system = agent.instructions ?? this.instructions;
 
         // tools
         const tools = [];
@@ -258,7 +274,7 @@ class ClaudeModel {
 
     // interact
     async interact(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         // execute pending function calls if last turn is model with function_call components
@@ -415,7 +431,7 @@ class ClaudeModel {
 
     // stream interact
     async *streamInteract(agent, conversation, context, options = {}) {
-        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, agent);
+        if (!(agent instanceof AIAgent)) agent = new AIAgent(this, { ...this.options?.agent, ...agent });
         if (!(conversation instanceof AIConversation)) conversation = new AIConversation(agent, conversation);
 
         // execute pending function calls if last turn is model with function_call components
