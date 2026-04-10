@@ -154,5 +154,6 @@ module.exports = {
     AIFunctionToolkit,
     AIRemoteFunction,
     AINativeAction,
-    AIFunctionResponse
+    AIFunctionResponse,
+    unknownFunction: new AIFunction('UNKNOWN', 'UNKNOWN FUNCTION.', {}, () => ({ STATUS: 'ERROR', CODE: 'UNKNOWN_FUNCTION' }))
 };

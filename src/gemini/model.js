@@ -293,14 +293,21 @@ class GeminiModel {
                 if (i.type !== 'function_call') continue;
 
                 const fn = agent._actions[i.name] ?? agent._functions[i.name];
-                if (!fn) continue;
-
-                funcs.push({
-                    name: i.name,
-                    func: fn,
-                    args: i.arguments,
-                    ctx: context
-                });
+                if (!fn) {
+                    funcs.push({
+                        name: i.name,
+                        func: this.service.unknownFunction,
+                        args: i.arguments,
+                        ctx: context
+                    });
+                } else {
+                    funcs.push({
+                        name: i.name,
+                        func: fn,
+                        args: i.arguments,
+                        ctx: context
+                    });
+                }
             }
 
             if (funcs.length > 0) {
@@ -470,10 +477,10 @@ class GeminiModel {
         if (conversation.last?.role === 'model') {
             const funcs = [];
             for (let i of conversation.last.components) {
-                if (i.type === 'function_call' && (agent._functions[i.name] || agent._actions[i.name])) {
+                if (i.type === 'function_call') {
                     funcs.push({
                         name: i.name,
-                        func: agent._functions[i.name] || agent._actions[i.name],
+                        func: agent._functions[i.name] || agent._actions[i.name] || this.service.unknownFunction,
                         args: i.arguments,
                         ctx: context
                     });

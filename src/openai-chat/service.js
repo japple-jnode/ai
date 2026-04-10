@@ -9,12 +9,14 @@ by JustApple
 
 // dependencies
 const OAIChatModel = require('./model.js');
+const { unknownFunction } = require('./../function.js');
 
 // openai chat completion service
 class OAIChatService {
     constructor(options = {}) {
         this.baseUrl = options.baseUrl ?? 'https://api.openai.com/v1';
         this.options = options;
+        this.unknownFunction = options.unknownFunction ?? unknownFunction;
     }
 
     model(name, options) {
