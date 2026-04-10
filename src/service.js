@@ -10,7 +10,7 @@ by JustApple
 // dependencies
 const AIModel = require('./model.js');
 const { request } = require('@jnode/request');
-const { unknownFunction } = require('./../function.js');
+const { unknownFunction } = require('./function.js');
 
 // basic jai service
 class AIService {
